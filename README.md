@@ -86,3 +86,6 @@ In case of homomers, the same group_id specifies different redundant crosslink p
   [357, "R", 75, "C", 2],
 ]
 ```
+### Results
+
+Scoring plots can be found in the output directory. The top N poses (over all local docking jobs) are saved with suffix _topN.pdb.
