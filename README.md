@@ -35,6 +35,7 @@ python3 docking_pipeline.py --help
 
 Example input using crosslinking information and 3DEM map (with an effective resolution of 12 Angstrom):
 ```
+python3 docking_pipeline.py \
 --pdb_file model.pdb \
 --map_file  map.mrc \
 --resolution 12 \
