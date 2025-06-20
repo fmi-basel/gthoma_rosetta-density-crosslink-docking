@@ -1,4 +1,18 @@
-#!/usr/bin/env python
+# Copyright 2025 Friedrich Miescher Institute for Biomedical Research
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Authors: Georg Kempf, Friedrich Miescher Institute for Biomedical Research
 
 from contextlib import closing
 import json
@@ -147,22 +161,19 @@ class RosettaDocking(Utils):
     def __init__(self, pdb_file: Optional[str] = None, 
                  map_file: Optional[str] = None, 
                  xlink_file: Optional[str] = None, 
-                 xlink_file_homo_oligomer: Optional[str] = None, 
                  nproc: Optional[int] = None, 
                  nstruct_centroid: Optional[int] = None, 
                  nstruct_local: Optional[int] = None, 
                  cluster_rmsd: Optional[float] = None, 
-                 centroid_score_weights: Optional[str] = None, 
+                 centroid_score_weights: Optional[str] = None,
+                 num_top_centroid_poses: Optional[str] = None, 
                  local_score_weights: Optional[str] = None, 
                  cluster_center: Optional[str] = None, 
-                 density_percent_filter: Optional[float] = None, 
-                 xl_percent_filter: Optional[float] = None, 
                  chains1: Optional[str] = None, 
                  chains2: Optional[str] = None, 
                  xl_threshold_distance: Optional[float] = None, 
                  overwrite: Optional[bool] = None, 
                  resolution: Optional[float] = None, 
-                 xl_scoring_method: Optional[str] = None, 
                  centroid_score_labels: Optional[str] = None, 
                  local_score_labels: Optional[str] = None, 
                  xlink_test: bool = False, 
@@ -179,8 +190,6 @@ class RosettaDocking(Utils):
             Path to the density map file.
         xlink_file: Optional[str]
             Path to the crosslink (XL) file.
-        xlink_file_homo_oligomer: Optional[str]
-            Path to the crosslink file for homo-oligomers.
         nproc: Optional[int]
             Number of processors to use.
         nstruct_centroid: Optional[int]
@@ -195,10 +204,6 @@ class RosettaDocking(Utils):
             Weights for local score labels (comma-separated string).
         cluster_center: Optional[str]
             Score type for determining cluster center.
-        density_percent_filter: Optional[float]
-            Density score percent filter.
-        xl_percent_filter: Optional[float]
-            Crosslink score percent filter.
         chains1: Optional[str]
             Chain identifier(s) representing the receptor.
         chains2: Optional[str]
@@ -209,8 +214,6 @@ class RosettaDocking(Utils):
             Whether to overwrite existing files.
         resolution: Optional[float]
             Resolution of the map.
-        xl_scoring_method: Optional[str]
-            Scoring method for crosslinks.
         centroid_score_labels: Optional[str]
             Labels for scores used in centroid docking pipeline (comma-separated string).
         local_score_labels: Optional[str]
@@ -244,8 +247,6 @@ class RosettaDocking(Utils):
 
         # Additional parameters
         self.cluster_center = cluster_center
-        self.density_percent_filter = density_percent_filter
-        self.xl_percent_filter = xl_percent_filter
         self.chains1 = chains1
         self.chains2 = chains2
         self.xl_threshold_distance = xl_threshold_distance
@@ -260,10 +261,8 @@ class RosettaDocking(Utils):
             self.map_file = None
             self.density_scoring = False
             
-        self.xl_scoring_method = xl_scoring_method
         self.pdb_file = os.path.join(self.base_dir, pdb_file)
         self.xl_scoring = False
-        self.xl_scoring_homo_oligomer = False
         self.dist_measure = dist_measure
         
         # Load crosslink files
@@ -272,12 +271,6 @@ class RosettaDocking(Utils):
             self.xl_scoring = True
         else:
             self.xlink_list = None
-            
-        if xlink_file_homo_oligomer:
-            self.xlink_list_homo_oligomer = self.utils.load_json(xlink_file_homo_oligomer)
-            self.xl_scoring_homo_oligomer = True
-        else:
-            self.xlink_list_homo_oligomer = None
         
         # Process score labels
         self.centroid_score_labels = centroid_score_labels.split(',') if centroid_score_labels else []
@@ -295,7 +288,7 @@ class RosettaDocking(Utils):
         # Run docking pipelines
         pose_list, pose_dir, silent_file_centroid = self.centroid_docking_pipeline()
         # Top 5 poses
-        pose_list = pose_list[:5]
+        pose_list = pose_list[:num_top_centroid_poses]
         logger.info("Top 5 poses from centroid docking:")
         logger.info(pose_list)
         pose_dir, pose_list = self.extract_silent(silent_file_centroid, pose_list)
@@ -663,7 +656,6 @@ class RosettaDocking(Utils):
             silent_file_docking = self.utils.get_filename('silent', 'local_docking', pose_name)
             csv_file_clustering = self.utils.get_filename('csv', 'clustering', pose_name)
             csv_file_xl_scoring = self.utils.get_filename('csv', 'xl_scored', pose_name)
-            csv_file_xl_scoring_homo_oligomer = self.utils.get_filename('csv', 'xl_scored_homo_oligomer', pose_name)
             csv_file_density_scoring = self.utils.get_filename('csv', 'density_scored', pose_name)
             pose_dir = f"{pose_name}_local_docking_extracted_poses"
             if not os.path.exists(sc_file_docking):
@@ -1618,59 +1610,6 @@ class RosettaDocking(Utils):
 
         return df, extended_score_labels
 
-    def select_best_scoring_poses(self, density_df: Optional[pd.DataFrame] = None, xl_df: Optional[pd.DataFrame] = None, score_labels: Optional[List[str]] = None, score_weights: Optional[List[float]] = None, percentage: float = 0.1) -> Tuple[List[str], pd.DataFrame]:
-        """Selects best scoring poses based on provided filters and returns the list of pose names and a DataFrame.
-
-        Parameters
-        ----------
-        density_df : Optional[pd.DataFrame]
-            DataFrame containing density scores.
-        xl_df : Optional[pd.DataFrame]
-            DataFrame containing XL scores.
-        score_labels : Optional[List[str]]
-            List of score labels to consider.
-        score_weights : Optional[List[float]]
-            List of weights corresponding to the score labels.
-        percentage : float
-            Percentage of poses to select.
-
-        Returns
-        -------
-        Tuple[List[str], pd.DataFrame]
-            List of selected poses and DataFrame with filtered scores.
-        """
-        score_labels_found = ['description']
-        if density_df is not None:
-            merged_df = density_df
-            score_labels_found.append('elec_dens_fast')
-            logger.info(f"Size of density DF: {len(merged_df)}")
-        else:
-            logger.info("No density df provided")
-
-        if xl_df is not None:
-            logger.info("Merging with xl df")
-            merged_df = pd.merge(merged_df, xl_df, on='description', how='inner')
-            score_labels_found.append('valid_xlinks')
-            logger.info(f"Size of merged DF: {len(merged_df)}")
-        else:
-            logger.info("No xl df provided")
-
-        for score_label in score_labels:
-            if score_label not in score_labels_found:
-                print(f"Cannot score by {score_label} since it was not found in the output files")
-                sys.exit()
-
-        merged_df, score_labels = self.get_combined_score(merged_df, score_labels, score_weights)
-        merged_df_sorted = merged_df.sort_values('combined_score', ascending=False)
-        self.generate_plots(merged_df, score_labels, 'centroid')
-        logger.info("Merged and sorted DF:")
-        logger.info(merged_df_sorted)
-        num_to_select = int(percentage * len(merged_df_sorted))
-        filtered_df = merged_df_sorted['description'].head(num_to_select)
-        self.generate_plots(filtered_df, score_labels, 'centroid_filtered')
-        selected_poses = filtered_df.tolist()
-        return selected_poses, filtered_df
-
     def select_best_cluster_poses(self, cluster_df: Optional[pd.DataFrame] = None, density_df: Optional[pd.DataFrame] = None, energy_df: Optional[pd.DataFrame] = None, xl_df: Optional[pd.DataFrame] = None, score_labels: Optional[List[str]] = None, score_weights: Optional[List[float]] = None, cluster_center: Optional[str] = None, pose_name: Optional[str] = None, skip_plots: bool = False) -> Tuple[List[str], pd.DataFrame]:
         """Selects best poses from each cluster and returns the list of pose names and a DataFrame.
         
@@ -1773,36 +1712,31 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Rosetta docking pipeline with scoring by energy, crosslinks and density')
     parser.add_argument('--pdb_file', type=str, required=True, help='Path to PDB file')
     parser.add_argument('--map_file', type=str, default=None, help='Path to map file')
-    parser.add_argument('--xlink_file', type=str, default=None, help='Path to xlink file')
-    parser.add_argument('--xlink_file_homo_oligomer', type=str, default=None, help='Path to a xlink file with crosslinks that can occur in multiple chains')
+    parser.add_argument('--xlink_file', type=str, default=None, help='Path to xlink file in json format')
     parser.add_argument('--chains1', type=str, required=True, help='Chains 1')
     parser.add_argument('--chains2', type=str, required=True, help='Chains 2')
-    parser.add_argument('--resolution', type=float, default=None, help='Resolution')
+    parser.add_argument('--resolution', type=float, default=None, help='Effective resolution of the 3DEM map in Angstrom')
     parser.add_argument('--nproc', type=int, default=10, help='Number of processors')
-    parser.add_argument('--nstruct_centroid', type=int, default=50000, help='Number of centroid structures')
-    parser.add_argument('--nstruct_local', type=int, default=2000, help='Number of local structures')
-    parser.add_argument('--cluster_rmsd', type=float, default=9, help='Cluster RMSD')
+    parser.add_argument('--nstruct_centroid', type=int, default=50000, help='Number of centroid structures. Default 50,000')
+    parser.add_argument('--nstruct_local', type=int, default=2000, help='Number of local structures. Default 2,000 per selected centroid pose')
+    parser.add_argument('--cluster_rmsd', type=float, default=9, help='Cluster RMSD in Angstrom')
+    parser.add_argument('--centroid_score_labels', default=None, type=str, help='Rosetta scoring labels to be used in pose ranking, e.g. elec_dens_fast,valid_xlinks')
     parser.add_argument('--centroid_score_weights', type=str, default=None, help='List of weights corresponding to centroid score label list')
+    parser.add_argument('--num_top_centroid_poses', type=int, default=5, help='Number of clustered and ranked centroid poses to select for local docking. Default top 5.')
+    parser.add_argument('--local_score_labels', default=None, type=str, help='Rosetta scoring labels to be used in pose ranking. e.g. I_sc,elec_dens_fast,valid_xlinks')
     parser.add_argument('--local_score_weights', type=str, default=None, help='List of weights corresponding to local score label list')
-    parser.add_argument('--cluster_center', type=str, default='elec_dens_fast', help='cluster center')
-    parser.add_argument('--density_percent_filter', type=float, default=0.1, help='Density percent filter')
-    parser.add_argument('--xl_percent_filter', type=float, default=0.1, help='XL percent filter')
-    parser.add_argument('--xl_threshold_distance', type=float, default=30.0, help='XL threshold distance')
-    parser.add_argument('--overwrite', action='store_true', default=False, help='Overwrite')
-    parser.add_argument('--xl_scoring_method', type=str, choices=['scoring', 'homo_oligomer_single_crosslink'], default='scoring', help='XL scoring method')
-    parser.add_argument('--centroid_score_labels', default=None, type=str)
-    parser.add_argument('--local_score_labels', default=None, type=str)
-    parser.add_argument('--xlink_test', action='store_true', default=False)
-    parser.add_argument('--dist_measure', default='dist', type=str, help='One of [euk_dist, sas_dist]')
+    parser.add_argument('--cluster_center', type=str, default='elec_dens_fast', help='Which score to use for finding the cluster center. e.g. one of elec_dens_fast,valid_xlinks or combined_score to use the average score based on --centroid_score_labels or --local_score_labels')
+    parser.add_argument('--xl_threshold_distance', type=float, default=30.0, help='XL threshold distance in Angstrom')
+    parser.add_argument('--overwrite', action='store_true', default=False, help='Overwrite files')
+    parser.add_argument('--xlink_test', action='store_true', default=False, help='Test of crosslink scoring for debugging')
+    parser.add_argument('--dist_measure', default='dist', type=str, choices=['euk_dist', 'sas_dist'], help='One of [euk_dist, sas_dist]. Sets the distance measure used by Xwalk to euclidean distance or SAS distance (see Xwalk documentation)')
     args = parser.parse_args()
 
-    RosettaDocking(pdb_file=args.pdb_file, map_file=args.map_file, xlink_file=args.xlink_file, xlink_file_homo_oligomer=args.xlink_file_homo_oligomer,
+    RosettaDocking(pdb_file=args.pdb_file, map_file=args.map_file, xlink_file=args.xlink_file,
                    nproc=args.nproc, nstruct_centroid=args.nstruct_centroid, nstruct_local=args.nstruct_local,
-                   cluster_rmsd=args.cluster_rmsd, centroid_score_weights=args.centroid_score_weights, local_score_weights=args.local_score_weights,
-                   cluster_center=args.cluster_center, density_percent_filter=args.density_percent_filter,
-                   xl_percent_filter=args.xl_percent_filter, chains1=args.chains1, chains2=args.chains2,
+                   cluster_rmsd=args.cluster_rmsd, centroid_score_weights=args.centroid_score_weights, num_top_centroid_poses=args.num_top_centroid_poses, local_score_weights=args.local_score_weights,
+                   cluster_center=args.cluster_center, chains1=args.chains1, chains2=args.chains2,
                    xl_threshold_distance=args.xl_threshold_distance, overwrite=args.overwrite,
-                   resolution=args.resolution, xl_scoring_method=args.xl_scoring_method,
-                   centroid_score_labels=args.centroid_score_labels, local_score_labels=args.local_score_labels, xlink_test=args.xlink_test, dist_measure=args.dist_measure)
+                   resolution=args.resolution, centroid_score_labels=args.centroid_score_labels, local_score_labels=args.local_score_labels, xlink_test=args.xlink_test, dist_measure=args.dist_measure)
 
 
